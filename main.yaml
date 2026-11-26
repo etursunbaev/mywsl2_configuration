@@ -23,6 +23,12 @@
         state: present
       become: true
 
+    - name: Make sure GitHub CLI is installed
+      ansible.builtin.apt:
+        name: gh
+        state: present
+      become: true
+
     - name: Make sure Unzip is installed
       ansible.builtin.apt:
         name: unzip
