@@ -1,0 +1,132 @@
+---
+- name: Playbook to install and configure WSL Ubuntu environment
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    kubectl_version: ""
+    kubectl_architectures:
+      x86_64: amd64
+      aarch64: arm64
+
+  
+  tasks:
+    - name: Make sure docker is installed
+      ansible.builtin.apt:
+        name: docker.io
+        state: present
+        update_cache: yes 
+      become: true    
+
+    - name: Make sure Git is installed
+      ansible.builtin.apt:
+        name: git
+        state: present
+      become: true
+
+    - name: Make sure Unzip is installed
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+      become: true
+
+    - name: Check whether AWS CLI is installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/aws
+        follow: true
+      register: aws_cli_binary
+
+    - name: Install AWS CLI
+      when:
+        - not aws_cli_binary.stat.exists
+        - not ansible_check_mode
+      block:
+        - name: Create temporary AWS CLI installer directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: aws-cli-
+          register: aws_cli_tempdir
+
+        - name: Download AWS CLI installer
+          ansible.builtin.get_url:
+            url: https://awscli.amazonaws.com/v2/install.sh
+            dest: "{{ aws_cli_tempdir.path }}/install.sh"
+            mode: '0600'
+
+        - name: Run AWS CLI installer
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ aws_cli_tempdir.path }}/install.sh"
+              - --system
+            creates: /usr/local/bin/aws
+          become: true
+      always:
+        - name: Remove temporary AWS CLI installer directory
+          ansible.builtin.file:
+            path: "{{ aws_cli_tempdir.path }}"
+            state: absent
+          when: aws_cli_tempdir.path is defined
+
+    - name: Check kubectl architecture is supported
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in kubectl_architectures
+        fail_msg: "Unsupported kubectl architecture: {{ ansible_architecture }}"
+
+    - name: Get the latest stable kubectl version
+      ansible.builtin.uri:
+        url: https://dl.k8s.io/release/stable.txt
+        return_content: true
+      register: kubectl_stable
+      when: kubectl_version | length == 0
+
+    - name: Install kubectl
+      ansible.builtin.get_url:
+        url: "{{ kubectl_download_url }}"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+        checksum: "sha256:{{ kubectl_download_url }}.sha256"
+      vars:
+        kubectl_release: "{{ kubectl_version if kubectl_version | length > 0 else kubectl_stable.content | trim }}"
+        kubectl_download_url: "https://dl.k8s.io/release/{{ kubectl_release }}/bin/linux/{{ kubectl_architectures[ansible_architecture] }}/kubectl"
+      become: true
+
+    - name: Check out tfenv
+      ansible.builtin.git:
+        repo: https://github.com/tfutils/tfenv.git
+        dest: "{{ ansible_env.HOME }}/.tfenv"
+        depth: 1
+        update: false
+
+    - name: Add tfenv to the Bash profile
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.bash_profile"
+        line: 'export PATH="$HOME/.tfenv/bin:$PATH"'
+        create: true
+
+    - name: Check out tgenv
+      ansible.builtin.git:
+        repo: https://github.com/tgenv/tgenv.git
+        dest: "{{ ansible_env.HOME }}/.tgenv"
+        version: main
+        depth: 1
+        update: false
+
+    - name: Add tgenv to the Bash profile
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.bash_profile"
+        line: 'export PATH="$HOME/.tgenv/bin:$PATH"'
+        create: true
+
+    - name: Configure Terraform and Terragrunt aliases
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_env.HOME }}/{{ item }}"
+        create: true
+        marker: "# {mark} ANSIBLE MANAGED TERRAFORM ALIASES"
+        block: |
+          alias tfm='terraform'
+          alias tgn='terragrunt'
+          alias kbctl='kubectl'
+      loop:
+        - .bashrc
+        - .bash_profile
