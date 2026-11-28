@@ -35,6 +35,12 @@
         state: present
       become: true
 
+    - name: Make sure DNS utilities are installed
+      ansible.builtin.apt:
+        name: bind9-dnsutils
+        state: present
+      become: true
+
     - name: Check whether AWS CLI is installed
       ansible.builtin.stat:
         path: /usr/local/bin/aws
